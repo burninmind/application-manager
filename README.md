@@ -32,8 +32,8 @@ Verify with `tectonic --version`.
 
 ```powershell
 # from the project root
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1          # PowerShell
+conda create -n app_m python=3.11 -y
+conda activate app_m
 pip install -r requirements.txt
 
 copy .env.example .env                # then edit .env to set ANTHROPIC_API_KEY
