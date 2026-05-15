@@ -15,7 +15,7 @@ You review and edit the output of every step before it's accepted. Only the fina
 
 ## Prerequisites
 
-- **Python 3.11+**
+- **Python 3.13+**
 - **Tectonic** (LaTeX engine, single binary, no system TeX required)
 - An **Anthropic API key** with access to Claude Opus 4.7 (or override the model — see below)
 
