@@ -20,6 +20,14 @@ MODEL_METADATA = os.environ.get("CLAUDE_MODEL_METADATA", "claude-haiku-4-5-20251
 
 _client: Anthropic | None = None
 
+_OPUS_NO_TEMP_RE = re.compile(r"^claude-opus-4-(\d+)")
+
+
+def _opus_no_temperature(model: str) -> bool:
+    """Opus 4.7 and newer reject the temperature parameter."""
+    m = _OPUS_NO_TEMP_RE.match(model)
+    return bool(m) and int(m.group(1)) >= 7
+
 
 def client() -> Anthropic:
     global _client
@@ -47,9 +55,9 @@ def _call(
         "system": system,
         "messages": [{"role": "user", "content": user_blocks}],
     }
-    # Opus 4.7 deprecated the temperature parameter; only pass it for models
+    # Opus 4.7+ deprecated the temperature parameter; only pass it for models
     # that still accept it.
-    if not model.startswith("claude-opus-4-7"):
+    if not _opus_no_temperature(model):
         kwargs["temperature"] = temperature
     for attempt in range(4):
         try:
