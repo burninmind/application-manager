@@ -87,6 +87,7 @@ application-manager/
 | Key                       | Default                       | Purpose                                          |
 | ------------------------- | ----------------------------- | ------------------------------------------------ |
 | `ANTHROPIC_API_KEY`       | *(required)*                  | Your Anthropic API key                           |
+| `APPLICANT_NAME`          | *(empty)*                     | Prefixes generated file names, e.g. `Ali Mahmoudi-resume.pdf`. Empty falls back to `resume.pdf` / `letter.pdf`. |
 | `CLAUDE_MODEL_TRANSLATE`  | `claude-haiku-4-5-20251001`   | Step 1: translate job description                |
 | `CLAUDE_MODEL_TAILOR`     | `claude-sonnet-4-6`           | Step 2: tailor resume (hardest step — judgment)  |
 | `CLAUDE_MODEL_LETTER`     | `claude-sonnet-4-6`           | Step 3: draft motivation letter                  |

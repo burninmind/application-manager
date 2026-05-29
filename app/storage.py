@@ -72,13 +72,15 @@ def save_application(
     letter_tex: str,
     resume_pdf: Path,
     letter_pdf: Path,
+    resume_stem: str = "resume",
+    letter_stem: str = "letter",
 ) -> Path:
     """Persist artifacts on disk and index in the DB. Returns folder path."""
     folder = application_folder(company, vacancy, on_date)
     folder.mkdir(parents=True, exist_ok=True)
 
-    (folder / "resume.tex").write_text(resume_tex, encoding="utf-8")
-    (folder / "letter.tex").write_text(letter_tex, encoding="utf-8")
+    (folder / f"{resume_stem}.tex").write_text(resume_tex, encoding="utf-8")
+    (folder / f"{letter_stem}.tex").write_text(letter_tex, encoding="utf-8")
     (folder / "job_description.txt").write_text(job_description_original, encoding="utf-8")
     if job_description_english != job_description_original:
         (folder / "job_description.en.txt").write_text(job_description_english, encoding="utf-8")

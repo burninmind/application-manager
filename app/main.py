@@ -2,22 +2,33 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from datetime import date, datetime
 from pathlib import Path
 
 import gradio as gr
 from dotenv import load_dotenv
+
+load_dotenv()
+
 from langdetect import DetectorFactory, detect
 
 from app import latex, llm, storage
 
 DetectorFactory.seed = 0
-load_dotenv()
 
 ROOT = Path(__file__).resolve().parent.parent
 RESUME_PATH = ROOT / "resume.tex"
 LETTER_TEMPLATE_PATH = ROOT / "templates" / "letter.tex"
+APPLICANT_NAME = os.getenv("APPLICANT_NAME", "").strip()
+
+
+def _file_stems() -> tuple[str, str]:
+    """Return (resume_stem, letter_stem) for the generated files."""
+    if APPLICANT_NAME:
+        return f"{APPLICANT_NAME}-resume", f"{APPLICANT_NAME}-letter"
+    return "resume", "letter"
 
 
 # ---------- helpers ----------
@@ -235,8 +246,9 @@ def _finalize(
 
     folder = storage.application_folder(company, vacancy, today)
     folder.mkdir(parents=True, exist_ok=True)
-    resume_tex_path = folder / "resume.tex"
-    letter_tex_path = folder / "letter.tex"
+    resume_stem, letter_stem = _file_stems()
+    resume_tex_path = folder / f"{resume_stem}.tex"
+    letter_tex_path = folder / f"{letter_stem}.tex"
     resume_tex_path.write_text(tailored_resume, encoding="utf-8")
     letter_tex_path.write_text(final_letter, encoding="utf-8")
 
@@ -256,6 +268,8 @@ def _finalize(
         letter_tex=final_letter,
         resume_pdf=resume_pdf,
         letter_pdf=letter_pdf,
+        resume_stem=resume_stem,
+        letter_stem=letter_stem,
     )
     status = f"Saved to `{folder}`."
     return status, str(resume_pdf), str(letter_pdf)

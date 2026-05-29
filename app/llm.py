@@ -41,15 +41,19 @@ def _call(
     max_tokens: int = 4096,
 ) -> str:
     """Single Claude call with simple retry on 429/529."""
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": user_blocks}],
+    }
+    # Opus 4.7 deprecated the temperature parameter; only pass it for models
+    # that still accept it.
+    if not model.startswith("claude-opus-4-7"):
+        kwargs["temperature"] = temperature
     for attempt in range(4):
         try:
-            resp = client().messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system,
-                messages=[{"role": "user", "content": user_blocks}],
-            )
+            resp = client().messages.create(**kwargs)
             return "".join(b.text for b in resp.content if b.type == "text")
         except APIStatusError as e:
             if e.status_code in (429, 529) and attempt < 3:
