@@ -87,6 +87,26 @@ def _apply_removals(original: str, removals: list[dict], accepted_ids: set[str])
     return out, warnings
 
 
+SUMMARY_SECTION_MARKER = r"\section*{Summary}"
+
+
+def _summary_count_warnings(tailored: str) -> list[str]:
+    """Warn unless exactly one Summary section survives the removals."""
+    n = tailored.count(SUMMARY_SECTION_MARKER)
+    if n == 1:
+        return []
+    if n == 0:
+        return [
+            "No Summary section remains after the proposed removals. "
+            "Exactly one summary variant should be kept."
+        ]
+    return [
+        f"{n} Summary sections remain after the proposed removals. "
+        "Exactly one summary variant should be kept; "
+        "deselect the extra removal(s) or adjust your selection."
+    ]
+
+
 def _removals_to_rows(removals: list[dict], accepted_ids: set[str]) -> list[list]:
     rows: list[list] = []
     for r in removals:
@@ -136,6 +156,7 @@ def _tailor(
     )
     accepted = {r["id"] for r in removals}
     tailored, warnings = _apply_removals(resume_tex, removals, accepted)
+    warnings += _summary_count_warnings(tailored)
     rows = _removals_to_rows(removals, accepted)
     status = _removals_status(removals, warnings)
     return tailored, removals, rows, status
@@ -167,13 +188,16 @@ def _reapply_local(
         return resume_tex, ""
     accepted = _accepted_ids_from_rows(rows, removals)
     tailored, warnings = _apply_removals(resume_tex, removals, accepted)
+    warnings += _summary_count_warnings(tailored)
     return tailored, _removals_status(removals, warnings)
 
 
 def _removals_status(removals: list[dict], warnings: list[str]) -> str:
     if not removals:
-        return "_No removals were proposed._"
-    parts = [f"_{len(removals)} removal(s) proposed. Toggle 'Accept' to apply or skip each._"]
+        head = "_No removals were proposed._"
+    else:
+        head = f"_{len(removals)} removal(s) proposed. Toggle 'Accept' to apply or skip each._"
+    parts = [head]
     if warnings:
         parts.append("")
         parts.extend(f"- {w}" for w in warnings)

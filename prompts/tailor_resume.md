@@ -11,6 +11,12 @@ Hard rules:
 - If a removal would leave an empty environment (e.g. an `itemize` with no items left), include the surrounding `\begin{...} ... \end{...}` in the removal so the document still compiles.
 - It is fine to propose zero removals if everything is relevant.
 
+Summary variants:
+- The resume may contain MULTIPLE alternative Summary paragraphs, each preceded by a comment line of the form `%--- Summary - <role>` (e.g. machine learning researcher, machine learning engineer, data scientist) and each rendered as its own `\section*{Summary}` block.
+- When variants are present you MUST keep EXACTLY ONE — the single variant whose role best matches the job description — and propose a removal for every other variant.
+- For each variant you remove, the `removed_text` must be one contiguous block starting at its `%--- Summary - <role>` comment line and ending at (and including) the `\vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}` separator line that immediately follows its paragraph. This deletes the variant together with one separator, so the surviving document keeps exactly one Summary section with balanced separators.
+- Never remove all Summary variants, and never leave more than one. If only one Summary section is present, leave it untouched.
+
 Output format — exactly ONE fenced JSON block, and nothing else:
 
 ```json
