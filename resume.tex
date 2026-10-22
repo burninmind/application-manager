@@ -1,70 +1,45 @@
+% Example resume for a fictional person. Put your own resume in resume.local.tex
+% (gitignored) or upload it from the app. Conventions the app relies on:
+%   - The long summary sits between "% BEGIN SUMMARY" and "% END SUMMARY". It is your
+%     full career story: tailoring replaces it with a short job-specific summary, and
+%     the cover letter uses it as its main source.
+%   - Publications are entries in the filecontents* block; the app keeps the best
+%     RESUME_MAX_PUBLICATIONS of them. Projects are kept up to RESUME_MAX_PROJECTS.
+%   - Keep \usepackage{lmodern} after fontenc, or accented glyphs render blank.
 \begin{filecontents*}{publications.bib}
-@inproceedings{tigau2026graph,
-  title={Graph Neural Networks for Human Activity Recognition in Smart Environments},
-  author={{\c{T}}ig{\u{a}}u, David-Dumitru and Mahmoudi, Ali and Pijlman, Fetze and Ozcelebi, Tanir},
-  booktitle={2026 International Joint Conference on Neural Networks (IJCNN)},
-  year={2026},
-  organization={IEEE},
+@inproceedings{doe2025forecasting,
+  title={Probabilistic Load Forecasting for Residential Energy Communities},
+  author={Doe, Alex and M{\"u}ller, Jana and Kowalski, Piotr},
+  booktitle={2025 IEEE International Conference on Smart Grid Communications (SmartGridComm)},
+  pages={1--6},
+  year={2025},
+  organization={IEEE}
 }
-@inproceedings{mahmoudi2024leveraging,
-  title={Leveraging Language Models for Human Activity Recognition for Intelligent Lighting},
-  author={Mahmoudi, Ali and Ozcelebi, Tanir and Meratnia, Nirvana},
-  booktitle={2024 IEEE Sustainable Smart Lighting World Conference \& Expo (LS24)},
-  pages={1--4},
+
+@inproceedings{doe2024anomaly,
+  title={Unsupervised Anomaly Detection in Industrial Sensor Streams},
+  author={Doe, Alex and Kowalski, Piotr},
+  booktitle={2024 International Joint Conference on Neural Networks (IJCNN)},
+  pages={1--8},
   year={2024},
   organization={IEEE}
 }
 
-@article{misaghi2019saliency,
-  title={Saliency Detection With Fully Convolutional Neural Network},
-  author={Misaghi, Hooman and Moghadam, Reza Askari and Mahmoudi, Ali and Madani, Kurosh},
-  journal={arXiv preprint arXiv:1906.09806},
-  year={2019}
+@article{garcia2023retrieval,
+  title={Retrieval-Augmented Question Answering over Technical Manuals},
+  author={Garc{\'i}a, Luis and Doe, Alex},
+  journal={arXiv preprint arXiv:2301.00000},
+  year={2023}
 }
 
-@inproceedings{mahmoudi2019introduction,
-  title={Introduction to Sequential Heteroscedastic Probabilistic Neural Networks},
-  author={Mahmoudi, Ali and Moghadam, Reza Askari and Madani, Kurosh},
-  booktitle={International Joint Conference on Computational Intelligence},
-  pages={387--402},
-  year={2019},
-  organization={Springer}
-}
-
-@inproceedings{mahmoudi2019passive,
-  title={Passive Dynamic Walking with Neuroevolutionary Controlled Torso},
-  author={Mahmoudi, Ali and Moghadam, Reza Askari and Misaghi, Hooman and Rafati, Iman},
-  booktitle={2019 27th Iranian Conference on Electrical Engineering (ICEE)},
-  pages={997--1001},
-  year={2019},
+@inproceedings{doe2021segmentation,
+  title={Lightweight Semantic Segmentation for Agricultural Robots},
+  author={Doe, Alex and Garc{\'i}a, Luis and M{\"u}ller, Jana},
+  booktitle={2021 IEEE International Conference on Robotics and Automation (ICRA)},
+  pages={101--107},
+  year={2021},
   organization={IEEE}
 }
-
-@inproceedings{mahmoudi2019sequential,
-  title={A Sequential Heteroscedastic Probabilistic Neural Network for Online Classification.},
-  author={Mahmoudi, Ali and Moghadam, Reza Askari and Madani, Kurosh},
-  booktitle={IJCCI},
-  pages={449--453},
-  year={2019}
-}
-@inproceedings{misaghi2018image,
-  title={Image Saliency Detection By Residual And Inception-like CNNs},
-  author={Misaghi, Hooman and Moghadam, Reza Askari and Mahmoudi, Ali and Salemi, Armina},
-  booktitle={2018 6th RSI International Conference on Robotics and Mechatronics (IcRoM)},
-  pages={94--99},
-  year={2018},
-  organization={IEEE}
-}
-
-@inproceedings{misaghi2017dynamic,
-  title={Dynamic analysis of a planar parallel robot with the purpose of obtaining optimal inertial parameters for energy consumption},
-  author={Misaghi, Hooman and Mahmoudi, Ali and Masouleh, Mehdi Tale},
-  booktitle={2017 IEEE 4th International Conference on Knowledge-Based Engineering and Innovation (KBEI)},
-  pages={0931--0936},
-  year={2017},
-  organization={IEEE}
-}
-
 \end{filecontents*}
 
 \documentclass[a4paper,10pt]{article}
@@ -77,111 +52,108 @@
 
 \begin{document}
 
-
-
 \begin{center}
-    {\LARGE \textbf{Ali Mahmoudi}}\\[2mm]
-    \href{mailto:alimahmoudi1991@gmail.com}{alimahmoudi1991@gmail.com} \quad | \quad +31 6 85184924 \quad | \quad Eindhoven, The Netherlands
+    {\LARGE \textbf{Alex Doe}}\\[2mm]
+    \href{mailto:alex.doe@example.com}{alex.doe@example.com} \quad | \quad +00 0 00000000 \quad | \quad Example City, Country
 \\[1mm]
-\href{https://www.linkedin.com/in/ali-mahmoudi-786aa668}{LinkedIn}
+\href{https://www.linkedin.com/in/example}{LinkedIn}
 \quad
-\href{https://github.com/burninmind}{Github}
-
+\href{https://github.com/example}{Github}\\
+\textbf{Work authorization}: Example statement about your right to work, if relevant
 \end{center}
 \vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}
-%--- Summary - machine learning researcher
+
 \section*{Summary}
-Machine learning researcher with a strong peer-reviewed publication record spanning deep learning, large language models, and computer vision, currently completing a Ph.D. on human activity recognition with ambient sensing in collaboration with Signify. Experienced in developing novel methods for real-world challenges such as transfer learning, open-set recognition, and federated learning, and in communicating results through scientific venues, teaching, and student supervision.
-\vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}
-%--- Summary - machine learning engineer
-\section*{Summary}
-Machine learning engineer experienced in building ML systems across NLP, LLM and agentic applications, computer vision, and time series, taking models from research prototype to deployable artifact. Comfortable across the modern stack (PyTorch, Hugging Face, ONNX, Docker, LangChain, LlamaIndex) with a focus on turning models into reliable services ready for real-world use.
-\vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}
-%--- Summary - data scientist
-\section*{Summary}
-Data scientist with a Ph.D.-level foundation in machine learning, experienced in translating complex data into actionable insights across time series, NLP, and anomaly/open-set detection. Strong in Python and rigorous model validation on real-world non-iid data, with a proven ability to frame ambiguous problems and communicate findings to stakeholders.
-\vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}
+% BEGIN SUMMARY (replaced by a short, job-specific summary when tailoring)
+I am a machine learning engineer with a background in robotics and applied statistics. During my master's degree I built lightweight segmentation models for agricultural robots, which taught me to care about model size and latency as much as accuracy.
 
-\section*{Education}
-\noindent \textbf{Ph.D. in Computer Science and Mathematics} \hfill April 2021-Present\\
-\textbf{Eindhoven University of Technology} \hfill Eindhoven, The Netherlands\\
-Thesis Title: \textit{Addressing the real-world challenges of human activity recognition with ambient sensing.}\\
+After graduating I joined an energy startup as a data scientist. I built the probabilistic load forecasting service that the company still uses to plan battery dispatch for 40 residential energy communities, cutting forecast error by 18\% compared with the previous gradient-boosting baseline. I also set up the team's first CI pipeline and model registry, so new models could be validated and deployed in hours instead of weeks.
 
-\noindent \textbf{M.Sc. in Mechatronics Engineering} \hfill September 2016-September 2019\\
-\textbf{University of Tehran} \hfill Tehran, Iran\\
-Thesis Title: \textit{Improving visual artificial curiosity through knowledge self-organizing systems.}\\
+Most recently I worked at an industrial automation company on anomaly detection for sensor streams from production lines. I led a team of three, worked closely with plant managers to turn alerts into maintenance actions, and reduced unplanned downtime on the pilot line by 12\%.
 
-\noindent \textbf{B.Sc. in Mechanical Engineering} \hfill September 2009-September 2014\\
-\textbf{Amirkabir University of Technology} \hfill Tehran, Iran\\
-Thesis Title: \textit{Modeling and analysis of a passive dynamic walker with mass distribution in legs.}\\
+I enjoy problems where messy real-world data meets a clear business decision. I am looking for a team that ships models to production, values careful validation, and gives people room to learn.
+% END SUMMARY
 
 \vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}
-
 
 \section*{Experience}
 \begin{itemize}[leftmargin=*]
-    \item \textbf{Ph.D. Candidate at Eindhoven University of Technology}\hfill April 2021-April 2026\\ 
-    \textbf{Location:} Eindhoven, The Netherlands\\
-    \textbf{Tasks:}
+    \item \textbf{Senior Data Scientist at Example Automation}\hfill 2023-2026
     \begin{itemize}
-        \item Conducting research as a part of the IntelLight project in collaboration with Signify.
-            \begin{itemize}
-            \item Worked on solving different challenges that can arise in human activity recognition (HAR) with ambient sensing. These challenges include dealing with heterogeneous sensor configurations, proper validation of models trained on non-iid data, open-set recognition, transfer learning across different sensor configurations, and federated learning across different environments.
-        \end{itemize}
-        \item Instructor for 2IMN15 Internet of Things course.
-        \item Supervising master's students.
+        \item Led a team of 3 building unsupervised anomaly detection for sensor streams from 12 production lines.
+        \item Reduced unplanned downtime on the pilot line by 12\% by turning model alerts into maintenance tickets with plant managers.
+        \item Deployed models as FastAPI services in Docker on Azure Kubernetes Service, with monitoring for data drift.
+        \item Presented results monthly to operations leadership and wrote the business case for the company-wide rollout.
     \end{itemize}
-    \item \textbf{Research \& Development Engineer at Jahan Shimi} A manufacturing startup in packaging solutions for cosmetic products\hfill May 2020-February 2021\\
-    \textbf{Location:} Tehran, Iran\\
-    \textbf{Tasks}: 
+    \item \textbf{Data Scientist at Example Energy}\hfill 2021-2023
     \begin{itemize}
-        \item Established the R\&D department and coordinated with other teams.
-        \item Exploring technologies such as computer vision and machine learning to enhance production capacity.
-        \item Negotiated and secured contracts with partner companies for technology development projects.
+        \item Built a probabilistic load forecasting service for 40 residential energy communities, reducing forecast error by 18\%.
+        \item Set up CI with GitHub Actions and an MLflow model registry, cutting model release time from weeks to hours.
+        \item Wrote SQL pipelines on Databricks that merged smart meter, weather, and tariff data.
+        \item Ran A/B tests of battery dispatch strategies with the product team.
     \end{itemize}
-        \item \textbf{Production supervisor at Maharan Engineering Corporation} Manufacturer of railroad and subway signaling and telecommunication systems\hfill May 2015-October 2015\\
-    \textbf{Location:} Tehran, Iran\\
-
 \end{itemize}
 \vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}
 
+\section*{Education}
+\noindent \textbf{M.Sc. in Robotics} \hfill 2019-2021\\
+\textbf{Example University of Technology}\\
+Thesis Title: \textit{Lightweight semantic segmentation for agricultural robots.}\\
 
-\section*{Skills}
-\noindent \textbf{Programming Languages:} Python, MATLAB\\
-\textbf{Frameworks:} PyTorch, Tensorflow, Scikit-Learn, XGBoost, LightGBM, Huggingface, ONNX\\
-\textbf{Optimization:} Optuna, DEAP\\
-\textbf{LLM tools:} LangChain, Ollama, Unsloth, LlamaIndex\\
-\textbf{Databases:} SQL, ChromaDB\\
-\textbf{Cloud:} Microsoft Azure\\
-\textbf{Tools \& DevOps:} Docker, Git, Linux\\
-\textbf{Others tools:} OpenCV, Wandb, Gradio\\
-\textbf{Languages:} English (C2), Farsi (native), Dutch (A2)
+\noindent \textbf{B.Sc. in Applied Mathematics} \hfill 2016-2019\\
+\textbf{Example University}\\
 \vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}
 
+\section*{Skills}
+\noindent \textbf{Programming Languages:} Python, SQL, R\\
+\textbf{Machine Learning:} PyTorch, scikit-learn, XGBoost, statsmodels, Hugging Face\\
+\textbf{Data:} pandas, PySpark, Databricks\\
+\textbf{MLOps:} MLflow, Docker, Kubernetes, GitHub Actions, FastAPI\\
+\textbf{Cloud:} Microsoft Azure\\
+\textbf{Languages:} English (C1), German (B2)
+\vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}
+
+\section*{Projects}
+\noindent \textbf{Energy forecaster} \href{https://github.com/example/energy-forecaster}{Github}
+
+\noindent Open-source library for probabilistic household load forecasting with quantile models.
+
+\noindent Stack: Python, PyTorch, statsmodels, pandas\\
+
+\noindent \textbf{Manual QA bot} \href{https://github.com/example/manual-qa}{Github}
+
+\noindent Retrieval-augmented question answering over technical manuals, with an evaluation set of 200 questions.
+
+\noindent Stack: Python, Hugging Face, FastAPI, Docker\\
+
+\noindent \textbf{Sensor anomaly toolkit} \href{https://github.com/example/sensor-anomaly}{Github}
+
+\noindent Streaming anomaly detection for multivariate sensor data, with a dashboard for alert review.
+
+\noindent Stack: Python, scikit-learn, PySpark\\
+
+\noindent \textbf{Crop segmentation} \href{https://github.com/example/crop-seg}{Github}
+
+\noindent Real-time semantic segmentation of crops and weeds on an embedded GPU.
+
+\noindent Stack: Python, PyTorch, ONNX\\
+
+\textit{For more projects, please visit my \href{https://github.com/example}{Github profile}.}
+\vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}
 
 \section*{Publications}
 \vspace{-1.5\baselineskip}
-
 \renewcommand{\refname}{}
 \nocite{*}
 \bibliographystyle{unsrt}
 \bibliography{publications}
+
+\textit{For more publications, please visit my \href{https://scholar.google.com}{Google Scholar profile}.}
 \vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}
 
-
-\section*{Specialized Schools \& Courses}
+\section*{Courses}
 \begin{itemize}[leftmargin=*]
-    \item ASCI computer vision by learning, 2025.
-    \item UBISS ubiquitous artificial intelligence: machine learning on IoT devices, 2024.
-    \item ASCI winter school on efficient deep learning, 2024.
-\end{itemize}
-\vspace{0.5\baselineskip}\hrule\vspace{0.5\baselineskip}
-
-
-\section*{Other Competencies}
-\begin{itemize}[leftmargin=*]
-    \item \href{https://app.astrobin.com/u/burninmind}{Amateur astrophotography} and computational photography.
-    \item Mechanical prototyping with SOLIDWORKS for Computer Assisted Design (CAD) and ANSYS for Finite Element Analysis (FEA).
+    \item Example summer school on probabilistic machine learning, 2024.
 \end{itemize}
 
 \end{document}

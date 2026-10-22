@@ -1,4 +1,4 @@
-"""Claude API wrappers for the four LLM steps."""
+"""Claude API wrappers, one function per pipeline step."""
 from __future__ import annotations
 
 import json
@@ -11,40 +11,25 @@ from anthropic import Anthropic, APIStatusError
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
-# Per-step model selection. Defaults aim for the cheapest model that does each
-# job well; override any of these in .env to tune cost vs. quality.
+# Per-step model and effort (low | medium | high | xhigh | max); override in .env.
 MODEL_TRANSLATE = os.environ.get("CLAUDE_MODEL_TRANSLATE", "claude-haiku-4-5")
 MODEL_TAILOR = os.environ.get("CLAUDE_MODEL_TAILOR", "claude-sonnet-5-5")
 MODEL_LETTER = os.environ.get("CLAUDE_MODEL_LETTER", "claude-sonnet-5-5")
 MODEL_METADATA = os.environ.get("CLAUDE_MODEL_METADATA", "claude-haiku-4-5")
-
-# Effort (low | medium | high | xhigh | max) for the judgment-heavy steps. It
-# replaces temperature as the quality knob on newer models, and is only sent
-# to models that accept it. Opus 5.5 defaults to "medium", so set it explicitly.
 EFFORT_TAILOR = os.environ.get("CLAUDE_EFFORT_TAILOR", "high")
 EFFORT_LETTER = os.environ.get("CLAUDE_EFFORT_LETTER", "high")
 EFFORT_TRANSLATE = os.environ.get("CLAUDE_EFFORT_TRANSLATE", "low")
 EFFORT_METADATA = os.environ.get("CLAUDE_EFFORT_METADATA", "low")
 
-_client: Anthropic | None = None
-
-# Newer models (Opus 4.7+, every 5-series model) reject non-default sampling
-# parameters, so temperature is an allowlist: unknown/future models never get it.
+# Opus 4.7+ and all 5-series models reject non-default sampling, so this is an allowlist.
 _TEMPERATURE_OK_RE = re.compile(r"^claude-(haiku-4-5|sonnet-4-[56]|opus-4-[56])")
 # Haiku 4.5 and Sonnet 4.5 reject `effort`.
 _EFFORT_OK_RE = re.compile(r"^claude-(opus-4-[5-9]|sonnet-4-6|opus-5|sonnet-5|haiku-5|fable-5|mythos-5)")
-# Models whose safety classifiers can decline a request; opt into Anthropic's
-# server-side fallback so a decline is retried on another model in the same call.
+# Models with safety classifiers: retry a refusal on another model server-side.
 _FALLBACK_RE = re.compile(r"^claude-(opus-5|sonnet-5-5|fable-5)")
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
-
-def _accepts_temperature(model: str) -> bool:
-    return bool(_TEMPERATURE_OK_RE.match(model))
-
-
-def _accepts_effort(model: str) -> bool:
-    return bool(_EFFORT_OK_RE.match(model))
+_client: Anthropic | None = None
 
 
 def client() -> Anthropic:
@@ -65,13 +50,12 @@ def _call(
     model: str,
     temperature: float = 0.2,
     effort: str | None = None,
-    max_tokens: int = 4096,
+    max_tokens: int = 32000,
 ) -> str:
-    """Single Claude call with simple retry on 429/529.
+    """One streamed Claude call with retry on 429/529. Returns the concatenated text blocks.
 
-    temperature and effort are each sent only to models that accept them.
-    Streams so that large max_tokens (thinking counts toward it on 5-series
-    models) don't hit the SDK's non-streaming timeout guard.
+    Streams because 5-series thinking counts toward max_tokens, and large non-streaming
+    max_tokens trips the SDK timeout guard.
     """
     kwargs: dict = {
         "model": model,
@@ -79,13 +63,13 @@ def _call(
         "system": system,
         "messages": [{"role": "user", "content": user_blocks}],
     }
-    if _accepts_temperature(model):
+    if _TEMPERATURE_OK_RE.match(model):
         kwargs["temperature"] = temperature
-    if effort and _accepts_effort(model):
+    if effort and _EFFORT_OK_RE.match(model):
         kwargs["output_config"] = {"effort": effort}
     if _FALLBACK_RE.match(model):
         kwargs["betas"] = [_FALLBACK_BETA]
-        kwargs["extra_body"] = {"fallbacks": "default"}
+        kwargs["extra_body"] = {"fallbacks": "default"}  # not typed by the pinned SDK yet
     for attempt in range(4):
         try:
             with client().beta.messages.stream(**kwargs) as stream:
@@ -98,26 +82,22 @@ def _call(
             raise
     if resp.stop_reason == "refusal":
         details = getattr(resp, "stop_details", None)
-        category = getattr(details, "category", None) if details else None
-        raise RuntimeError(f"{model} declined the request (category: {category}).")
-    if resp.stop_reason == "max_tokens":
         raise RuntimeError(
-            f"{model} hit max_tokens={max_tokens} before finishing; output was truncated."
+            f"{model} declined the request (category: {getattr(details, 'category', None)})."
         )
-    # Read by block type: 5-series responses can include thinking/fallback blocks.
+    if resp.stop_reason == "max_tokens":
+        raise RuntimeError(f"{model} hit max_tokens={max_tokens}; output was truncated.")
+    # Thinking and fallback blocks can precede the text.
     return "".join(b.text for b in resp.content if b.type == "text")
 
 
 def translate_job_description(text: str) -> str:
-    """Return English version. If already English, returns text unchanged via caller."""
-    system = _load_prompt("translate")
     out = _call(
-        system=system,
+        system=_load_prompt("translate"),
         user_blocks=[{"type": "text", "text": text}],
         model=MODEL_TRANSLATE,
         temperature=0.1,
         effort=EFFORT_TRANSLATE,
-        max_tokens=32000,
     )
     return out.strip()
 
@@ -126,87 +106,74 @@ def tailor_resume(
     resume_tex: str,
     job_description: str,
     *,
-    previous_removals: list[dict] | None = None,
+    max_projects: int,
+    max_publications: int,
+    previous: dict | None = None,
     feedback: str | None = None,
-) -> list[dict]:
-    """Return a list of proposed removals.
+) -> dict:
+    """Return {"summary": str, "removals": [{id, category, section, reason, removed_text, context}]}.
 
-    Each removal is {"id": str, "section": str, "reason": str, "removed_text": str},
-    where removed_text is a verbatim substring of resume_tex. The caller applies
-    accepted removals locally via string deletion — no further LLM call needed.
-
-    If previous_removals and/or feedback are supplied, the model revises the
-    proposed list to incorporate the feedback.
+    `summary` is a new LaTeX paragraph that replaces the long summary. Each removal's
+    `removed_text` (and `context`, when set) is a verbatim substring of resume_tex.
+    `previous` is an earlier result to revise according to `feedback`.
     """
-    system = _load_prompt("tailor_resume")
     user_text = (
+        f"<limits>\nmax_projects: {max_projects}\nmax_publications: {max_publications}\n</limits>\n\n"
         f"<job_description>\n{job_description}\n</job_description>\n\n"
         f"<resume_tex>\n{resume_tex}\n</resume_tex>"
     )
-    if previous_removals:
-        user_text += (
-            "\n\n<previous_removals>\n"
-            + json.dumps(previous_removals, indent=2)
-            + "\n</previous_removals>"
-        )
+    if previous:
+        user_text += f"\n\n<previous_result>\n{json.dumps(previous, indent=2)}\n</previous_result>"
     if feedback:
         user_text += f"\n\n<user_feedback>\n{feedback}\n</user_feedback>"
     raw = _call(
-        system=system,
-        user_blocks=[
-            # Cache the resume — reused across regenerations and step 3.
-            {"type": "text", "text": user_text, "cache_control": {"type": "ephemeral"}},
-        ],
+        system=_load_prompt("tailor_resume"),
+        # Cached so regenerations with feedback reuse the prompt.
+        user_blocks=[{"type": "text", "text": user_text, "cache_control": {"type": "ephemeral"}}],
         model=MODEL_TAILOR,
         temperature=0.2,
         effort=EFFORT_TAILOR,
-        max_tokens=32000,
     )
-    removals_raw = _extract_fenced(raw, "json") or raw
+    body = _extract_fenced(raw, "json") or raw
     try:
-        removals = json.loads(removals_raw)
+        data = json.loads(body)
     except json.JSONDecodeError:
-        # LaTeX-in-JSON often has lone backslashes (e.g. \item, \hfill) that
-        # aren't valid JSON string escapes. Repair and retry.
+        # Models often emit LaTeX like \item with one backslash, which is invalid JSON.
         try:
-            removals = json.loads(_repair_latex_json(removals_raw))
+            data = json.loads(_repair_latex_json(body))
         except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Model did not return valid JSON removals: {e}\n\n{raw[:2000]}"
-            )
-    if not isinstance(removals, list):
-        raise ValueError(f"Removals JSON is not a list:\n\n{raw[:2000]}")
-    normalized: list[dict] = []
-    for i, r in enumerate(removals):
-        if not isinstance(r, dict):
-            continue
-        normalized.append({
-            "id": str(r.get("id") or f"r{i+1}"),
+            raise ValueError(f"Model did not return valid JSON: {e}\n\n{raw[:2000]}")
+    if not isinstance(data, dict) or not isinstance(data.get("removals"), list):
+        raise ValueError(f"Expected an object with 'summary' and 'removals':\n\n{raw[:2000]}")
+
+    removals = []
+    for i, r in enumerate(x for x in data["removals"] if isinstance(x, dict)):
+        removals.append({
+            "id": str(r.get("id") or f"r{i + 1}"),
+            "category": str(r.get("category") or "other").strip().lower(),
             "section": str(r.get("section") or "").strip(),
             "reason": str(r.get("reason") or "").strip(),
             "removed_text": str(r.get("removed_text") or ""),
+            "context": str(r.get("context") or ""),
         })
-    return normalized
+    return {"summary": escape_latex_specials(str(data.get("summary") or "").strip()), "removals": removals}
 
 
 def motivation_letter(
     *,
     resume_tex: str,
+    long_summary: str,
     job_description: str,
     template_tex: str,
     company: str,
     previous_attempt: str | None = None,
     feedback: str | None = None,
 ) -> str:
-    """Return a complete .tex letter by filling the template.
-
-    If previous_attempt and/or feedback are supplied, the model revises the
-    previous attempt to incorporate the feedback.
-    """
-    system = _load_prompt("motivation_letter")
+    """Return the complete letter .tex, with the template's <<BODY>> filled in."""
     user_text = (
         f"<company>{company}</company>\n\n"
         f"<job_description>\n{job_description}\n</job_description>\n\n"
+        f"<candidate_story>\n{long_summary}\n</candidate_story>\n\n"
         f"<resume_tex>\n{resume_tex}\n</resume_tex>\n\n"
         f"<letter_template>\n{template_tex}\n</letter_template>"
     )
@@ -215,33 +182,28 @@ def motivation_letter(
     if feedback:
         user_text += f"\n\n<user_feedback>\n{feedback}\n</user_feedback>"
     raw = _call(
-        system=system,
+        system=_load_prompt("motivation_letter"),
         user_blocks=[{"type": "text", "text": user_text}],
         model=MODEL_LETTER,
         temperature=0.7,
         effort=EFFORT_LETTER,
-        max_tokens=32000,
     )
     tex = _extract_fenced(raw, "latex") or _extract_fenced(raw, "tex") or raw
     return tex.strip()
 
 
 def extract_metadata(job_description: str) -> dict:
-    """Return {'company': str, 'vacancy': str}. Uses cheap model."""
-    system = _load_prompt("extract_metadata")
+    """Return {'company': str, 'vacancy': str}, with 'Unknown' for missing fields."""
     raw = _call(
-        system=system,
+        system=_load_prompt("extract_metadata"),
         user_blocks=[{"type": "text", "text": job_description}],
         model=MODEL_METADATA,
         temperature=0.0,
         effort=EFFORT_METADATA,
-        # Thinking on 5-series models counts toward max_tokens, so leave room
-        # beyond the tiny JSON answer.
-        max_tokens=8000,
+        max_tokens=8000,  # thinking counts toward the cap on 5-series models
     )
-    js = _extract_fenced(raw, "json") or raw
     try:
-        data = json.loads(js)
+        data = json.loads(_extract_fenced(raw, "json") or raw)
     except json.JSONDecodeError:
         data = {}
     return {
@@ -255,19 +217,15 @@ _VALID_JSON_ESCAPES = set('"\\/bfnrtu')
 
 
 def _repair_latex_json(s: str) -> str:
-    """Escape lone backslashes that aren't part of a valid JSON escape.
-
-    The model often emits LaTeX commands like `\\item` inside JSON strings as
-    `\\item` (one backslash), which json.loads rejects. This rewrites each
-    `\\X` where X is not a valid JSON escape character into `\\\\X`, preserving
-    already-correct escapes like `\\\\`, `\\n`, `\\"`.
-    """
+    r"""Double every backslash that doesn't start a valid JSON escape (e.g. `\item` -> `\\item`)."""
     def fix(m: re.Match) -> str:
-        nxt = m.group(1)
-        if nxt in _VALID_JSON_ESCAPES:
-            return m.group(0)
-        return "\\\\" + nxt
+        return m.group(0) if m.group(1) in _VALID_JSON_ESCAPES else "\\\\" + m.group(1)
     return re.sub(r"\\(.)", fix, s, flags=re.DOTALL)
+
+
+def escape_latex_specials(s: str) -> str:
+    """Escape bare &, % and # so generated prose can't break or truncate a LaTeX line."""
+    return re.sub(r"(?<!\\)([&%#])", r"\\\1", s)
 
 
 def _extract_fenced(text: str, lang: str) -> str | None:

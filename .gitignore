@@ -12,3 +12,9 @@ applications/
 *.out
 *.synctex.gz
 .tectonic-cache/
+
+# Personal files: your own resume and local backups/settings
+resume.local.tex
+resume-v*.tex
+app.db.bak*
+.claude/settings.local.json

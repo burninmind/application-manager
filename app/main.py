@@ -1,8 +1,8 @@
-"""Gradio UI for the application manager."""
+"""Gradio UI and step orchestration."""
 from __future__ import annotations
 
-import json
 import os
+import re
 import shutil
 from datetime import date, datetime
 from pathlib import Path
@@ -10,7 +10,7 @@ from pathlib import Path
 import gradio as gr
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv()  # before importing app.llm, which reads model settings at import time
 
 from langdetect import DetectorFactory, detect
 
@@ -19,207 +19,209 @@ from app import latex, llm, storage
 DetectorFactory.seed = 0
 
 ROOT = Path(__file__).resolve().parent.parent
-RESUME_PATH = ROOT / "resume.tex"
+EXAMPLE_RESUME_PATH = ROOT / "resume.tex"  # committed placeholder
+LOCAL_RESUME_PATH = ROOT / "resume.local.tex"  # your own resume, gitignored
 LETTER_TEMPLATE_PATH = ROOT / "templates" / "letter.tex"
 APPLICANT_NAME = os.getenv("APPLICANT_NAME", "").strip()
+MAX_PROJECTS = int(os.getenv("RESUME_MAX_PROJECTS", "3"))
+MAX_PUBLICATIONS = int(os.getenv("RESUME_MAX_PUBLICATIONS", "3"))
+DUPLICATE_THRESHOLD = float(os.getenv("DUPLICATE_THRESHOLD", "0.90"))
+
+SUMMARY_RE = re.compile(r"(?P<begin>^[ \t]*% BEGIN SUMMARY[^\n]*\n)(?P<body>.*?)(?P<end>^[ \t]*% END SUMMARY)", re.S | re.M)
+BIB_BLOCK_RE = re.compile(r"\\begin\{filecontents\*?\}.*?\\end\{filecontents\*?\}", re.S)
+BIB_ENTRY_RE = re.compile(r"^\s*@\w+\s*\{", re.M)
+POINTER_LINE_RE = re.compile(r"^.*\bfor more\b.*$", re.I | re.M)
+
+STATUS_CHOICES = [(label, key) for key, label in storage.STATUSES.items()]
 
 
-def _file_stems() -> tuple[str, str]:
-    """Return (resume_stem, letter_stem) for the generated files."""
-    if APPLICANT_NAME:
-        return f"{APPLICANT_NAME}-resume", f"{APPLICANT_NAME}-letter"
-    return "resume", "letter"
+# ---------- resume ----------
 
+def _active_resume_path() -> Path:
+    return LOCAL_RESUME_PATH if LOCAL_RESUME_PATH.exists() else EXAMPLE_RESUME_PATH
 
-# ---------- helpers ----------
 
 def _resume_status() -> str:
-    if not RESUME_PATH.exists():
-        return "**No `resume.tex` in project root yet.** Upload one below."
-    mtime = datetime.fromtimestamp(RESUME_PATH.stat().st_mtime)
-    return f"**Current resume:** `resume.tex` (last modified {mtime:%Y-%m-%d %H:%M})"
+    path = _active_resume_path()
+    if not path.exists():
+        return "**No resume found.** Upload one below."
+    mtime = datetime.fromtimestamp(path.stat().st_mtime)
+    note = "" if path == LOCAL_RESUME_PATH else " (the example resume; upload your own to replace it)"
+    return f"**Current resume:** `{path.name}`{note}, last modified {mtime:%Y-%m-%d %H:%M}"
 
 
-def _load_resume_action(uploaded_file, choice: str) -> tuple[str, str]:
-    """Returns (resume_tex, status_markdown)."""
+def _load_resume(uploaded_file, choice: str) -> tuple[str, str, str]:
+    """Returns (resume_tex for display, status markdown, resume_tex for state)."""
     if choice == "Upload new resume":
         if uploaded_file is None:
             raise gr.Error("Choose a .tex file to upload, or switch to 'Use current resume'.")
         src = Path(uploaded_file if isinstance(uploaded_file, str) else uploaded_file.name)
         if src.suffix.lower() != ".tex":
             raise gr.Error("Resume must be a .tex file.")
-        shutil.copyfile(src, RESUME_PATH)
-    if not RESUME_PATH.exists():
-        raise gr.Error("No resume.tex available. Upload one first.")
-    return RESUME_PATH.read_text(encoding="utf-8"), _resume_status()
+        shutil.copyfile(src, LOCAL_RESUME_PATH)
+    path = _active_resume_path()
+    if not path.exists():
+        raise gr.Error("No resume available. Upload one first.")
+    tex = path.read_text(encoding="utf-8")
+    status = _resume_status()
+    if not SUMMARY_RE.search(tex):
+        status += (
+            "\n\n**Warning:** no `% BEGIN SUMMARY` / `% END SUMMARY` markers found. "
+            "Wrap your long summary in them before tailoring (see `resume.tex`)."
+        )
+    return tex, status, tex
 
 
-def _process_jd(raw_jd: str) -> str:
-    raw_jd = (raw_jd or "").strip()
-    if not raw_jd:
-        raise gr.Error("Paste a job description first.")
-    try:
-        lang = detect(raw_jd)
-    except Exception:
-        lang = "und"
-    if lang == "en":
-        return raw_jd
-    return llm.translate_job_description(raw_jd)
+def _long_summary(resume_tex: str) -> str:
+    m = SUMMARY_RE.search(resume_tex)
+    return m.group("body").strip() if m else ""
 
 
-def _apply_removals(original: str, removals: list[dict], accepted_ids: set[str]) -> tuple[str, list[str]]:
-    """Return (tailored_tex, warnings). Pure string deletion — no LLM call."""
-    out = original
-    warnings: list[str] = []
+def _replace_summary(resume_tex: str, summary: str) -> str:
+    """Swap the marked long summary for the short one, keeping the markers."""
+    return SUMMARY_RE.sub(lambda m: m.group("begin") + summary.strip() + "\n" + m.group("end"), resume_tex, count=1)
+
+
+# ---------- tailoring ----------
+
+def _locate(base: str, r: dict) -> tuple[tuple[int, int] | None, str | None]:
+    """Find the (start, end) span a removal deletes in base, or explain why it can't be applied."""
+    label = r.get("section") or r["id"]
+    snippet, context = r["removed_text"], r.get("context") or ""
+    if not snippet.strip():
+        return None, None
+    if context:
+        if snippet not in context:
+            return None, f"'{label}': removed text is not inside its context."
+        anchor, offset = context, context.index(snippet)
+    else:
+        anchor, offset = snippet, 0
+    count = base.count(anchor)
+    if count == 0:
+        return None, f"'{label}': text not found verbatim in the resume."
+    if count > 1:
+        return None, f"'{label}': text matches {count} places; not applied. Regenerate or edit by hand."
+    start = base.index(anchor) + offset
+    return (start, start + len(snippet)), None
+
+
+def _apply_removals(base: str, removals: list[dict], accepted_ids: set[str]) -> tuple[str, list[str]]:
+    """Delete every accepted removal from base. All spans are resolved against the same text."""
+    spans, warnings = [], []
     for r in removals:
-        if r.get("id") not in accepted_ids:
+        if r["id"] not in accepted_ids:
             continue
-        snippet = r.get("removed_text") or ""
-        if not snippet:
-            continue
-        if snippet not in out:
-            warnings.append(
-                f"Could not apply removal '{r.get('section') or r.get('id')}': "
-                f"text not found verbatim in the resume."
-            )
-            continue
-        out = out.replace(snippet, "", 1)
+        span, warning = _locate(base, r)
+        if warning:
+            warnings.append(f"Could not apply {warning}")
+        if span:
+            spans.append(span)
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    out = base
+    for start, end in reversed(merged):
+        out = out[:start] + out[end:]
     return out, warnings
 
 
-SUMMARY_SECTION_MARKER = r"\section*{Summary}"
+def _check_tailored(base: str, tailored: str) -> list[str]:
+    warnings = []
+    bib = BIB_BLOCK_RE.search(tailored)
+    n_pubs = len(BIB_ENTRY_RE.findall(bib.group(0))) if bib else 0
+    if n_pubs > MAX_PUBLICATIONS:
+        warnings.append(f"{n_pubs} publications remain; the limit is {MAX_PUBLICATIONS}.")
+    for line in POINTER_LINE_RE.findall(base):
+        if line.strip() and line not in tailored:
+            warnings.append(f"A 'for more ...' line was removed: `{line.strip()[:80]}`")
+    return warnings
 
 
-def _summary_count_warnings(tailored: str) -> list[str]:
-    """Warn unless exactly one Summary section survives the removals."""
-    n = tailored.count(SUMMARY_SECTION_MARKER)
-    if n == 1:
-        return []
-    if n == 0:
-        return [
-            "No Summary section remains after the proposed removals. "
-            "Exactly one summary variant should be kept."
-        ]
-    return [
-        f"{n} Summary sections remain after the proposed removals. "
-        "Exactly one summary variant should be kept; "
-        "deselect the extra removal(s) or adjust your selection."
-    ]
+def _build_tailored(original: str, summary: str, removals: list[dict], accepted_ids: set[str]) -> tuple[str, list[str]]:
+    """Original resume + short summary + accepted removals. Deterministic, no LLM call."""
+    base = _replace_summary(original, summary)
+    tailored, warnings = _apply_removals(base, removals, accepted_ids)
+    return tailored, warnings + _check_tailored(base, tailored)
 
 
 def _removals_to_rows(removals: list[dict], accepted_ids: set[str]) -> list[list]:
-    rows: list[list] = []
-    for r in removals:
-        rows.append([
-            r.get("id") in accepted_ids,
-            r.get("section") or "",
-            (r.get("removed_text") or "").strip(),
-            r.get("reason") or "",
-        ])
-    return rows
+    return [
+        [r["id"] in accepted_ids, r["category"], r["section"], r["removed_text"].strip(), r["reason"]]
+        for r in removals
+    ]
 
 
 def _accepted_ids_from_rows(rows, removals: list[dict]) -> set[str]:
-    """Map dataframe rows (which carry only the bool) back to removal ids by position."""
-    if rows is None:
-        return {r["id"] for r in removals}
+    """Rows carry only the checkbox, so map them back to removal ids by position."""
     try:
         accept_col = [bool(row[0]) for row in rows]
     except (TypeError, IndexError):
         return {r["id"] for r in removals}
-    return {
-        r["id"]
-        for r, accept in zip(removals, accept_col)
-        if accept
-    }
+    return {r["id"] for r, accept in zip(removals, accept_col) if accept}
 
 
-def _tailor(
-    resume_tex: str,
-    jd_english: str,
-    previous_removals: list[dict] | None = None,
-    feedback: str = "",
-) -> tuple[str, list[dict], list[list], str]:
-    """Run LLM, then locally apply all proposed removals.
+def _status_md(removals: list[dict], warnings: list[str]) -> str:
+    if removals:
+        head = f"_{len(removals)} removal(s) proposed. Untick any you want to keep, then press Apply changes._"
+    else:
+        head = "_No removals were proposed._"
+    return "\n".join([head, ""] + [f"- {w}" for w in warnings]) if warnings else head
 
-    Returns (tailored_tex, removals_state, dataframe_rows, status_md).
-    """
-    if not resume_tex.strip():
+
+def _tailor(original: str, jd_english: str, summary: str = "", removals: list[dict] | None = None, feedback: str = ""):
+    """Returns (tailored_tex, removals_state, dataframe_rows, summary, status_md)."""
+    if not original.strip():
         raise gr.Error("Resume is empty. Load a resume in step 0.")
     if not jd_english.strip():
         raise gr.Error("Confirm the job description in step 1 first.")
-    removals = llm.tailor_resume(
-        resume_tex,
+    if not SUMMARY_RE.search(original):
+        raise gr.Error("The resume needs '% BEGIN SUMMARY' and '% END SUMMARY' lines around the long summary.")
+    previous = {"summary": summary, "removals": removals} if removals or summary else None
+    result = llm.tailor_resume(
+        original,
         jd_english,
-        previous_removals=previous_removals or None,
+        max_projects=MAX_PROJECTS,
+        max_publications=MAX_PUBLICATIONS,
+        previous=previous,
         feedback=feedback.strip() or None,
     )
-    accepted = {r["id"] for r in removals}
-    tailored, warnings = _apply_removals(resume_tex, removals, accepted)
-    warnings += _summary_count_warnings(tailored)
-    rows = _removals_to_rows(removals, accepted)
-    status = _removals_status(removals, warnings)
-    return tailored, removals, rows, status
+    accepted = {r["id"] for r in result["removals"]}
+    tailored, warnings = _build_tailored(original, result["summary"], result["removals"], accepted)
+    rows = _removals_to_rows(result["removals"], accepted)
+    return tailored, result["removals"], rows, result["summary"], _status_md(result["removals"], warnings)
 
 
-def _retailor(
-    resume_tex: str,
-    jd_english: str,
-    current_removals: list[dict],
-    feedback: str,
-) -> tuple[str, list[dict], list[list], str]:
+def _retailor(original: str, jd_english: str, summary: str, removals: list[dict], feedback: str):
     if not feedback.strip():
-        raise gr.Error("Type feedback first, e.g. 'keep the open-source section'.")
-    return _tailor(
-        resume_tex,
-        jd_english,
-        previous_removals=current_removals or None,
-        feedback=feedback,
-    )
+        raise gr.Error("Type feedback first, e.g. 'keep the forecasting project'.")
+    return _tailor(original, jd_english, summary, removals, feedback)
 
 
-def _reapply_local(
-    resume_tex: str,
-    removals: list[dict],
-    rows,
-) -> tuple[str, str]:
-    """Recompute the tailored resume from the original + checkbox selection. No LLM."""
-    if not removals:
-        return resume_tex, ""
+def _reapply_local(original: str, summary: str, removals: list[dict], rows) -> tuple[str, str]:
     accepted = _accepted_ids_from_rows(rows, removals)
-    tailored, warnings = _apply_removals(resume_tex, removals, accepted)
-    warnings += _summary_count_warnings(tailored)
-    return tailored, _removals_status(removals, warnings)
+    tailored, warnings = _build_tailored(original, summary, removals, accepted)
+    return tailored, _status_md(removals, warnings)
 
 
-def _removals_status(removals: list[dict], warnings: list[str]) -> str:
-    if not removals:
-        head = "_No removals were proposed._"
-    else:
-        head = f"_{len(removals)} removal(s) proposed. Toggle 'Accept' to apply or skip each._"
-    parts = [head]
-    if warnings:
-        parts.append("")
-        parts.extend(f"- {w}" for w in warnings)
-    return "\n".join(parts)
+# ---------- letter ----------
 
-
-def _draft_letter(
-    tailored_resume: str,
-    jd_english: str,
-    company: str,
-    previous: str = "",
-    feedback: str = "",
-) -> str:
+def _draft_letter(tailored: str, original: str, jd_english: str, company: str, previous: str = "", feedback: str = "") -> str:
     if not LETTER_TEMPLATE_PATH.exists():
         raise gr.Error(f"Missing letter template at {LETTER_TEMPLATE_PATH}.")
     company = (company or "").strip()
     if not company:
         raise gr.Error("Fill in the Company field (Step 1) before drafting the letter.")
-    template = LETTER_TEMPLATE_PATH.read_text(encoding="utf-8")
-    template = template.replace("<<COMPANY>>", company)
+    template = (
+        LETTER_TEMPLATE_PATH.read_text(encoding="utf-8")
+        .replace("<<COMPANY>>", company)
+        .replace("<<NAME>>", APPLICANT_NAME)
+    )
     return llm.motivation_letter(
-        resume_tex=tailored_resume,
+        resume_tex=tailored,
+        long_summary=_long_summary(original),
         job_description=jd_english,
         template_tex=template,
         company=company,
@@ -228,24 +230,40 @@ def _draft_letter(
     )
 
 
-def _redraft_letter(
-    tailored_resume: str,
-    jd_english: str,
-    company: str,
-    current_letter: str,
-    feedback: str,
-) -> str:
+def _redraft_letter(tailored: str, original: str, jd_english: str, company: str, current_letter: str, feedback: str) -> str:
     if not current_letter.strip():
         raise gr.Error("Draft a letter first, then add feedback.")
     if not feedback.strip():
         raise gr.Error("Type feedback first, e.g. 'more concrete, fewer adjectives'.")
-    return _draft_letter(
-        tailored_resume,
-        jd_english,
-        company,
-        previous=current_letter,
-        feedback=feedback,
-    )
+    return _draft_letter(tailored, original, jd_english, company, current_letter, feedback)
+
+
+# ---------- other steps ----------
+
+def _process_jd(raw_jd: str) -> tuple[str, str, str]:
+    """Returns (English text for the editable box, original text for state, duplicate warning)."""
+    raw_jd = (raw_jd or "").strip()
+    if not raw_jd:
+        raise gr.Error("Paste a job description first.")
+    try:
+        lang = detect(raw_jd)
+    except Exception:
+        lang = "und"
+    english = raw_jd if lang == "en" else llm.translate_job_description(raw_jd)
+    return english, raw_jd, _duplicate_warning([raw_jd, english])
+
+
+def _duplicate_warning(texts: list[str]) -> str:
+    matches = storage.find_similar(texts, DUPLICATE_THRESHOLD)
+    if not matches:
+        return ""
+    gr.Warning("This job description looks like one you already applied to. See Step 1.")
+    lines = [
+        f"- **{m['score']:.0%}** match: #{m['id']} {m['company']} / {m['vacancy']}, "
+        f"applied {m['processed_at']} ({storage.STATUSES.get(m['status'], m['status'])})"
+        for m in matches
+    ]
+    return "**Possible duplicate application.** This posting closely matches:\n\n" + "\n".join(lines)
 
 
 def _extract_meta(jd_english: str) -> tuple[str, str]:
@@ -253,76 +271,75 @@ def _extract_meta(jd_english: str) -> tuple[str, str]:
     return meta["company"], meta["vacancy"]
 
 
-def _finalize(
-    *,
-    company: str,
-    vacancy: str,
-    tailored_resume: str,
-    letter_tex: str,
-    jd_english: str,
-    jd_original: str,
-):
+def _file_stems() -> tuple[str, str]:
+    if APPLICANT_NAME:
+        return f"{APPLICANT_NAME}-resume", f"{APPLICANT_NAME}-letter"
+    return "resume", "letter"
+
+
+def _finalize(company: str, vacancy: str, tailored: str, letter: str, jd_english: str, jd_original: str):
     company = (company or "Unknown").strip()
     vacancy = (vacancy or "Unknown").strip()
     today = date.today()
-
-    final_letter = letter_tex
-
     folder = storage.application_folder(company, vacancy, today)
     folder.mkdir(parents=True, exist_ok=True)
-    resume_stem, letter_stem = _file_stems()
-    resume_tex_path = folder / f"{resume_stem}.tex"
-    letter_tex_path = folder / f"{letter_stem}.tex"
-    resume_tex_path.write_text(tailored_resume, encoding="utf-8")
-    letter_tex_path.write_text(final_letter, encoding="utf-8")
 
+    resume_stem, letter_stem = _file_stems()
+    resume_path = folder / f"{resume_stem}.tex"
+    letter_path = folder / f"{letter_stem}.tex"
+    resume_path.write_text(tailored, encoding="utf-8")
+    letter_path.write_text(letter, encoding="utf-8")
     try:
-        resume_pdf = latex.compile_tex(resume_tex_path, folder)
-        letter_pdf = latex.compile_tex(letter_tex_path, folder)
+        resume_pdf = latex.compile_tex(resume_path, folder)
+        letter_pdf = latex.compile_tex(letter_path, folder)
     except latex.TectonicError as e:
         raise gr.Error(f"{e}\n\n--- tectonic log ---\n{e.log[-4000:]}")
 
     storage.save_application(
+        folder=folder,
         company=company,
         vacancy=vacancy,
         on_date=today,
         job_description_english=jd_english,
-        job_description_original=jd_original,
-        resume_tex=tailored_resume,
-        letter_tex=final_letter,
-        resume_pdf=resume_pdf,
-        letter_pdf=letter_pdf,
-        resume_stem=resume_stem,
-        letter_stem=letter_stem,
+        job_description_original=jd_original or jd_english,
+        resume_tex=tailored,
+        letter_tex=letter,
     )
-    status = f"Saved to `{folder}`."
-    return status, str(resume_pdf), str(letter_pdf)
+    return f"Saved to `{folder}`.", str(resume_pdf), str(letter_pdf)
 
+
+# ---------- search, status, delete ----------
 
 def _search(query: str) -> list[list]:
-    rows = storage.search(query)
     return [
-        [r["id"], r["processed_at"], r["company"], r["vacancy"], r["folder_path"]]
-        for r in rows
+        [r["id"], r["processed_at"], r["company"], r["vacancy"], storage.STATUSES.get(r["status"], r["status"]), r["folder_path"]]
+        for r in storage.search(query)
     ]
 
 
-def _delete(app_id, confirm: bool, current_query: str) -> tuple[str, list[list]]:
+def _parse_id(app_id) -> int:
+    try:
+        return int(app_id)
+    except (TypeError, ValueError):
+        raise gr.Error("Enter a valid numeric application ID.")
+
+
+def _set_status(app_id, status: str, query: str) -> tuple[str, list[list]]:
+    try:
+        row = storage.set_status(_parse_id(app_id), status)
+    except (LookupError, ValueError) as e:
+        raise gr.Error(str(e))
+    return f"#{row['id']} {row['company']} / {row['vacancy']}: {storage.STATUSES[status]}.", _search(query)
+
+
+def _delete(app_id, confirm: bool, query: str) -> tuple[str, list[list]]:
     if not confirm:
         raise gr.Error("Tick the confirmation box before deleting.")
     try:
-        app_id_int = int(app_id)
-    except (TypeError, ValueError):
-        raise gr.Error("Enter a valid numeric application ID.")
-    try:
-        deleted = storage.delete_application(app_id_int)
+        row = storage.delete_application(_parse_id(app_id))
     except LookupError as e:
         raise gr.Error(str(e))
-    status = (
-        f"Deleted #{deleted['id']} — {deleted['company']} / {deleted['vacancy']} "
-        f"(folder: `{deleted['folder_path']}`)."
-    )
-    return status, _search(current_query)
+    return f"Deleted #{row['id']} {row['company']} / {row['vacancy']} (folder: `{row['folder_path']}`).", _search(query)
 
 
 # ---------- UI ----------
@@ -336,250 +353,171 @@ def build_ui() -> gr.Blocks:
         original_resume_state = gr.State("")
 
         with gr.Tab("New application"):
-            # ---- Step 0: resume ----
-            with gr.Accordion("Step 0 — Choose resume", open=True):
+            with gr.Accordion("Step 0: Choose resume", open=True):
                 resume_status = gr.Markdown(_resume_status())
                 resume_choice = gr.Radio(
                     ["Use current resume", "Upload new resume"],
                     value="Use current resume",
                     label="Resume source",
                 )
-                resume_upload = gr.File(label="Upload resume.tex", file_types=[".tex"])
+                resume_upload = gr.File(label="Upload your resume (.tex)", file_types=[".tex"])
                 load_resume_btn = gr.Button("Load resume", variant="primary")
-                resume_tex = gr.Textbox(
-                    label="Loaded resume (.tex) — read-only",
-                    lines=8,
-                    interactive=False,
-                )
+                resume_view = gr.Textbox(label="Loaded resume (.tex, read-only)", lines=8, interactive=False)
 
-            # ---- Step 1: job description ----
-            with gr.Accordion("Step 1 — Job description", open=True):
+            with gr.Accordion("Step 1: Job description", open=True):
                 jd_input = gr.Textbox(label="Paste the job posting", lines=10)
                 process_jd_btn = gr.Button("Translate / accept", variant="primary")
-                jd_english = gr.Textbox(
-                    label="English job description (editable)",
-                    lines=10,
-                )
+                duplicate_md = gr.Markdown()
+                jd_english = gr.Textbox(label="English job description (editable)", lines=10)
                 extract_btn = gr.Button("Auto-fill company & vacancy")
                 with gr.Row():
                     company_in = gr.Textbox(label="Company")
                     vacancy_in = gr.Textbox(label="Vacancy title")
 
-            # ---- Step 2: tailored resume ----
-            with gr.Accordion("Step 2 — Tailored resume", open=False):
+            with gr.Accordion("Step 2: Tailored resume", open=False):
                 tailor_btn = gr.Button("Generate tailored resume", variant="primary")
                 gr.Markdown(
-                    "The model proposes **removals only** — it cannot add or "
-                    "rewrite content. Untick any removal you want to keep, then "
-                    "press **Apply changes** to rebuild the tailored resume "
-                    "below (no LLM call)."
+                    "The model writes a short **summary** (replacing your long one) and proposes "
+                    f"**removals**, keeping at most {MAX_PROJECTS} projects and {MAX_PUBLICATIONS} "
+                    "publications. Edit the summary, untick removals you disagree with, then press "
+                    "**Apply changes** to rebuild the resume below (no LLM call)."
                 )
+                summary_box = gr.Textbox(label="Short summary (LaTeX, editable)", lines=4)
                 removals_df = gr.Dataframe(
-                    headers=["Accept", "Section", "Removed", "Reason"],
-                    datatype=["bool", "str", "str", "str"],
+                    headers=["Accept", "Type", "Section", "Removed", "Reason"],
+                    datatype=["bool", "str", "str", "str", "str"],
                     interactive=True,
                     wrap=True,
-                    column_count=(4, "fixed"),
+                    column_count=(5, "fixed"),
                     type="array",
                 )
                 apply_btn = gr.Button("Apply changes", variant="primary")
-                omissions_md = gr.Markdown()
-                tailored_resume = gr.Textbox(
-                    label="Tailored resume (.tex, editable)",
-                    lines=20,
-                )
+                tailor_status = gr.Markdown()
+                tailored_resume = gr.Textbox(label="Tailored resume (.tex, editable)", lines=20)
                 resume_feedback = gr.Textbox(
                     label="Feedback for regeneration",
-                    placeholder="e.g. also drop the hobbies section; "
-                    "keep the open-source projects",
+                    placeholder="e.g. keep the forecasting project; mention Azure in the summary",
                     lines=3,
                 )
                 retailor_btn = gr.Button("Regenerate with feedback")
 
-            # ---- Step 3: motivation letter ----
-            with gr.Accordion("Step 3 — Motivation letter", open=False):
+            with gr.Accordion("Step 3: Motivation letter", open=False):
                 draft_letter_btn = gr.Button("Draft motivation letter", variant="primary")
-                letter_tex = gr.Textbox(
-                    label="Motivation letter (.tex, editable)",
-                    lines=20,
-                )
+                letter_tex = gr.Textbox(label="Motivation letter (.tex, editable)", lines=20)
                 letter_feedback = gr.Textbox(
                     label="Feedback for regeneration",
-                    placeholder="e.g. more concrete impact numbers; warmer opening; "
-                    "shorter closing paragraph",
+                    placeholder="e.g. more concrete impact numbers; warmer opening",
                     lines=3,
                 )
                 redraft_btn = gr.Button("Regenerate with feedback")
 
-            # ---- Step 4: finalize ----
-            with gr.Accordion("Step 4 — Finalize & compile", open=False):
+            with gr.Accordion("Step 4: Finalize & compile", open=False):
                 compile_btn = gr.Button("Compile & save", variant="primary")
                 finalize_status = gr.Markdown()
                 resume_pdf_out = gr.File(label="Resume PDF")
                 letter_pdf_out = gr.File(label="Letter PDF")
 
-            new_application_btn = gr.Button(
-                "Start new application", variant="primary"
-            )
+            new_application_btn = gr.Button("Start new application", variant="primary")
 
         with gr.Tab("Search"):
             search_input = gr.Textbox(
-                label="Search past applications (FTS5; empty = all)",
+                label="Search past applications (FTS5; empty = newest)",
                 placeholder='e.g. "python data" or "company:Acme"',
             )
             search_btn = gr.Button("Search")
             results_table = gr.Dataframe(
-                headers=["ID", "Date", "Company", "Vacancy", "Folder"],
+                headers=["ID", "Date", "Company", "Vacancy", "Status", "Folder"],
                 interactive=False,
                 wrap=True,
             )
 
+            gr.Markdown("### Update status")
+            with gr.Row():
+                status_id = gr.Number(label="Application ID", precision=0)
+                status_choice = gr.Dropdown(STATUS_CHOICES, value=storage.DEFAULT_STATUS, label="Status")
+            status_btn = gr.Button("Update status")
+            status_msg = gr.Markdown()
+
             gr.Markdown("### Delete an application")
-            gr.Markdown(
-                "Copy the **ID** from the results above. This removes the "
-                "database row **and** deletes the application folder from disk."
-            )
+            gr.Markdown("Removes the database row **and** the application folder on disk.")
             with gr.Row():
                 delete_id = gr.Number(label="Application ID", precision=0)
-                delete_confirm = gr.Checkbox(
-                    label="I understand this is permanent",
-                    value=False,
-                )
+                delete_confirm = gr.Checkbox(label="I understand this is permanent", value=False)
             delete_btn = gr.Button("Delete application", variant="stop")
             delete_status = gr.Markdown()
 
         # ---- wiring ----
-        def on_load_resume(uploaded_file, choice):
-            tex, status = _load_resume_action(uploaded_file, choice)
-            return tex, status, tex
-
         load_resume_btn.click(
-            on_load_resume,
+            _load_resume,
             inputs=[resume_upload, resume_choice],
-            outputs=[resume_tex, resume_status, original_resume_state],
+            outputs=[resume_view, resume_status, original_resume_state],
         )
+        process_jd_btn.click(_process_jd, inputs=[jd_input], outputs=[jd_english, jd_original_state, duplicate_md])
+        extract_btn.click(_extract_meta, inputs=[jd_english], outputs=[company_in, vacancy_in])
 
-        def on_process_jd(raw):
-            english = _process_jd(raw)
-            return english, raw  # english into editable box, raw into state
-
-        process_jd_btn.click(
-            on_process_jd,
-            inputs=[jd_input],
-            outputs=[jd_english, jd_original_state],
-        )
-
-        tailor_btn.click(
-            _tailor,
-            inputs=[resume_tex, jd_english],
-            outputs=[tailored_resume, removals_state, removals_df, omissions_md],
-        )
+        tailor_outputs = [tailored_resume, removals_state, removals_df, summary_box, tailor_status]
+        tailor_btn.click(_tailor, inputs=[original_resume_state, jd_english], outputs=tailor_outputs)
         retailor_btn.click(
             _retailor,
-            inputs=[resume_tex, jd_english, removals_state, resume_feedback],
-            outputs=[tailored_resume, removals_state, removals_df, omissions_md],
+            inputs=[original_resume_state, jd_english, summary_box, removals_state, resume_feedback],
+            outputs=tailor_outputs,
         )
         apply_btn.click(
             _reapply_local,
-            inputs=[original_resume_state, removals_state, removals_df],
-            outputs=[tailored_resume, omissions_md],
+            inputs=[original_resume_state, summary_box, removals_state, removals_df],
+            outputs=[tailored_resume, tailor_status],
         )
 
         draft_letter_btn.click(
             _draft_letter,
-            inputs=[tailored_resume, jd_english, company_in],
+            inputs=[tailored_resume, original_resume_state, jd_english, company_in],
             outputs=[letter_tex],
         )
         redraft_btn.click(
             _redraft_letter,
-            inputs=[tailored_resume, jd_english, company_in, letter_tex, letter_feedback],
+            inputs=[tailored_resume, original_resume_state, jd_english, company_in, letter_tex, letter_feedback],
             outputs=[letter_tex],
         )
 
-        extract_btn.click(
-            _extract_meta,
-            inputs=[jd_english],
-            outputs=[company_in, vacancy_in],
-        )
-
-        def on_compile(company, vacancy, tres, lt, jde, jdo):
-            return _finalize(
-                company=company,
-                vacancy=vacancy,
-                tailored_resume=tres,
-                letter_tex=lt,
-                jd_english=jde,
-                jd_original=jdo or jde,
-            )
-
         compile_btn.click(
-            on_compile,
-            inputs=[
-                company_in,
-                vacancy_in,
-                tailored_resume,
-                letter_tex,
-                jd_english,
-                jd_original_state,
-            ],
+            _finalize,
+            inputs=[company_in, vacancy_in, tailored_resume, letter_tex, jd_english, jd_original_state],
             outputs=[finalize_status, resume_pdf_out, letter_pdf_out],
         )
 
         search_btn.click(_search, inputs=[search_input], outputs=[results_table])
-
+        status_btn.click(
+            _set_status,
+            inputs=[status_id, status_choice, search_input],
+            outputs=[status_msg, results_table],
+        )
         delete_btn.click(
             _delete,
             inputs=[delete_id, delete_confirm, search_input],
             outputs=[delete_status, results_table],
         )
 
-        def _reset_application():
-            return (
-                "",   # jd_input
-                "",   # jd_english
-                "",   # jd_original_state
-                "",   # tailored_resume
-                [],   # removals_state
-                [],   # removals_df
-                "",   # omissions_md
-                "",   # resume_feedback
-                "",   # letter_tex
-                "",   # letter_feedback
-                "",   # company_in
-                "",   # vacancy_in
-                "",   # finalize_status
-                None, # resume_pdf_out
-                None, # letter_pdf_out
-            )
-
+        # Everything specific to one application; keep in sync when adding state.
+        reset_targets = {
+            jd_input: "", jd_english: "", jd_original_state: "", duplicate_md: "",
+            summary_box: "", removals_state: [], removals_df: [], tailor_status: "",
+            tailored_resume: "", resume_feedback: "",
+            letter_tex: "", letter_feedback: "",
+            company_in: "", vacancy_in: "",
+            finalize_status: "", resume_pdf_out: None, letter_pdf_out: None,
+        }
         new_application_btn.click(
-            _reset_application,
+            lambda: list(reset_targets.values()),
             inputs=[],
+            outputs=list(reset_targets),
             js="() => { window.scrollTo({ top: 0, behavior: 'smooth' }); }",
-            outputs=[
-                jd_input,
-                jd_english,
-                jd_original_state,
-                tailored_resume,
-                removals_state,
-                removals_df,
-                omissions_md,
-                resume_feedback,
-                letter_tex,
-                letter_feedback,
-                company_in,
-                vacancy_in,
-                finalize_status,
-                resume_pdf_out,
-                letter_pdf_out,
-            ],
         )
 
     return demo
 
 
 def main() -> None:
-    latex.ensure_tectonic()  # fail fast with a helpful message
+    latex.ensure_tectonic()  # fail fast with an install hint
     build_ui().launch()
 
 
