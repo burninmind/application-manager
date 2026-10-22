@@ -68,9 +68,19 @@ Tailor and letter prompts both forbid em dashes (—). The constraint exists bec
 Per-step model is read from env at import time:
 
 - `CLAUDE_MODEL_TRANSLATE` → Haiku 4.5
-- `CLAUDE_MODEL_TAILOR` → Sonnet 4.6 (this is the judgment-heavy step; bump to Opus if quality matters more than cost)
-- `CLAUDE_MODEL_LETTER` → Sonnet 4.6
+- `CLAUDE_MODEL_TAILOR` → Sonnet 5.5 (this is the judgment-heavy step; bump to Opus 5.5 if quality matters more than cost)
+- `CLAUDE_MODEL_LETTER` → Sonnet 5.5
 - `CLAUDE_MODEL_METADATA` → Haiku 4.5
+- `CLAUDE_EFFORT_TAILOR` / `CLAUDE_EFFORT_LETTER` → `high`; `CLAUDE_EFFORT_TRANSLATE` / `CLAUDE_EFFORT_METADATA` → `low`
+
+Don't set small `max_tokens` (e.g. 512) even for tiny outputs: 5-series models (Haiku 5.5 included) think by default and thinking counts toward the cap. Billing is per token used, so a generous cap is free.
+
+`_call` gates request parameters per model, by regex on the model ID:
+
+- `temperature` is an **allowlist** (`_TEMPERATURE_OK_RE`): Opus 4.7+ and all 5-series models reject non-default sampling with a 400. Keep it an allowlist so unknown future models are safe by default.
+- `output_config.effort` is sent only where accepted (`_EFFORT_OK_RE`); Haiku 4.5 rejects it.
+- 5-series models with safety classifiers (`_FALLBACK_RE`) get `fallbacks: "default"` via `extra_body` plus the `server-side-fallback-2026-07-01` beta, so a refusal is retried on another model server-side. `extra_body` because the pinned SDK doesn't type the param yet.
+- Calls stream (`beta.messages.stream` + `get_final_message`) because 5-series thinking counts toward `max_tokens`, and large non-streaming `max_tokens` trips the SDK's timeout guard. `stop_reason` `refusal` / `max_tokens` raise instead of returning partial text. Read response blocks by `type`; thinking and fallback blocks can appear before the text.
 
 Don't hardcode model IDs in new code paths — read them from `app.llm` module-level constants so `.env` overrides keep working. The tailor user message has `cache_control: ephemeral` so repeated regenerations reuse the prompt cache.
 

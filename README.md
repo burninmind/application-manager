@@ -88,12 +88,18 @@ application-manager/
 | ------------------------- | ----------------------------- | ------------------------------------------------ |
 | `ANTHROPIC_API_KEY`       | *(required)*                  | Your Anthropic API key                           |
 | `APPLICANT_NAME`          | *(empty)*                     | Prefixes generated file names, e.g. `Ali Mahmoudi-resume.pdf`. Empty falls back to `resume.pdf` / `letter.pdf`. |
-| `CLAUDE_MODEL_TRANSLATE`  | `claude-haiku-4-5-20251001`   | Step 1: translate job description                |
-| `CLAUDE_MODEL_TAILOR`     | `claude-sonnet-4-6`           | Step 2: tailor resume (hardest step — judgment)  |
-| `CLAUDE_MODEL_LETTER`     | `claude-sonnet-4-6`           | Step 3: draft motivation letter                  |
-| `CLAUDE_MODEL_METADATA`   | `claude-haiku-4-5-20251001`   | Step 4: extract company + vacancy from JD        |
+| `CLAUDE_MODEL_TRANSLATE`  | `claude-haiku-4-5`            | Step 1: translate job description                |
+| `CLAUDE_MODEL_TAILOR`     | `claude-sonnet-5-5`           | Step 2: tailor resume (hardest step, judgment)   |
+| `CLAUDE_MODEL_LETTER`     | `claude-sonnet-5-5`           | Step 3: draft motivation letter                  |
+| `CLAUDE_MODEL_METADATA`   | `claude-haiku-4-5`            | Step 4: extract company + vacancy from JD        |
+| `CLAUDE_EFFORT_TAILOR`    | `high`                        | Effort for step 2 (`low`/`medium`/`high`/`xhigh`/`max`) |
+| `CLAUDE_EFFORT_LETTER`    | `high`                        | Effort for step 3                                |
+| `CLAUDE_EFFORT_TRANSLATE` | `low`                         | Effort for step 1                                |
+| `CLAUDE_EFFORT_METADATA`  | `low`                         | Effort for step 4                                |
 
-Defaults pick the cheapest model that does each job well. Bump tailor/letter to `claude-opus-4-7` if you want top quality; bump translate to Sonnet for very long or jargon-heavy postings.
+Defaults pick the cheapest model that does each job well. Bump tailor/letter to `claude-opus-5-5` if you want top quality; bump translate to Sonnet for very long or jargon-heavy postings.
+
+Newer models (Opus 4.7+ and every 5-series model) don't accept `temperature`; the app only sends it to models that do. On those models, `effort` is the quality knob instead: higher effort means more thinking before answering, at more cost and latency. Effort is ignored by models that don't support it (Haiku 4.5).
 
 Prompts live in `prompts/*.md` — edit them to change tone or rules without touching code.
 
